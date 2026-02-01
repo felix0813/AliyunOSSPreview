@@ -3,6 +3,7 @@
 import android.os.Bundle
 import android.os.Environment
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
@@ -245,7 +246,24 @@ fun OssApp() {
         }
     }
 
+    fun handleObjectListBack() {
+        if (prefix.isBlank()) {
+            selectedBucket = null
+            objects = emptyList()
+            resetSelection()
+        } else {
+            val newPrefix = prefix.trimEnd('/')
+                .substringBeforeLast('/', missingDelimiterValue = "")
+                .let { if (it.isBlank()) "" else "$it/" }
+            credentials?.let { loadObjects(it, selectedBucket!!, newPrefix) }
+        }
+    }
+
     if (markdownContent != null) {
+        BackHandler {
+            markdownTitle = null
+            markdownContent = null
+        }
         MarkdownPreviewScreen(
             title = markdownTitle ?: "Markdown",
             content = markdownContent.orEmpty(),
@@ -255,6 +273,12 @@ fun OssApp() {
             }
         )
         return
+    }
+
+    BackHandler(enabled = selectedBucket != null) {
+        if (selectedBucket != null) {
+            handleObjectListBack()
+        }
     }
 
     Scaffold(
@@ -268,16 +292,7 @@ fun OssApp() {
                 showBack = selectedBucket != null,
                 onBack = {
                     if (selectedBucket != null) {
-                        if (prefix.isBlank()) {
-                            selectedBucket = null
-                            objects = emptyList()
-                            resetSelection()
-                        } else {
-                            val newPrefix = prefix.trimEnd('/')
-                                .substringBeforeLast('/', missingDelimiterValue = "")
-                                .let { if (it.isBlank()) "" else "$it/" }
-                            credentials?.let { loadObjects(it, selectedBucket!!, newPrefix) }
-                        }
+                        handleObjectListBack()
                     }
                 }
             )
