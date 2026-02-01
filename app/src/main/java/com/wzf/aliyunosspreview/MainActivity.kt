@@ -1,5 +1,6 @@
 ﻿package com.wzf.aliyunosspreview
 
+import android.content.Intent
 import android.os.Bundle
 import android.os.Environment
 import androidx.activity.ComponentActivity
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.wzf.aliyunosspreview.data.OssBucket
 import com.wzf.aliyunosspreview.data.OssCredentials
 import com.wzf.aliyunosspreview.data.OssObjectEntry
@@ -170,9 +172,13 @@ fun OssApp() {
                         keysToDownload.add(key)
                     }
                 }
+                val apkFiles = mutableListOf<File>()
                 keysToDownload.forEach { key ->
                     val appTargetFile = File(appBucketDir, key)
                     repository.downloadObject(targetCredentials, bucket.name, key, appTargetFile)
+                    if (key.endsWith(".apk", ignoreCase = true)) {
+                        apkFiles.add(appTargetFile)
+                    }
                     systemBucketDir?.let { systemDir ->
                         val systemTargetFile = File(systemDir, key)
                         systemTargetFile.parentFile?.mkdirs()
@@ -184,6 +190,9 @@ fun OssApp() {
                 } else {
                     "Downloaded ${keysToDownload.size} files to ${appBucketDir.absolutePath} " +
                         "and copied to ${systemBucketDir.absolutePath}"
+                }
+                apkFiles.forEach { apkFile ->
+                    installApk(apkFile)
                 }
                 resetSelection()
                 isLoading = false
@@ -221,6 +230,44 @@ fun OssApp() {
                 isLoading = false
             }
         }
+    }
+
+    fun downloadAndInstallApk(
+        targetCredentials: OssCredentials,
+        bucket: OssBucket,
+        key: String
+    ) {
+        coroutineScope.launch {
+            isLoading = true
+            errorMessage = null
+            infoMessage = null
+            val appDownloadRoot = context.getExternalFilesDir("downloads") ?: context.filesDir
+            val appTargetFile = File(appDownloadRoot, key)
+            runCatching {
+                repository.downloadObject(targetCredentials, bucket.name, key, appTargetFile)
+                infoMessage = "Downloaded APK to ${appTargetFile.absolutePath}"
+                installApk(appTargetFile)
+                isLoading = false
+            }.onFailure { throwable ->
+                errorMessage = throwable.message ?: "Download failed"
+                isLoading = false
+            }
+        }
+    }
+
+    fun installApk(apkFile: File) {
+        if (!apkFile.exists()) return
+        val apkUri = FileProvider.getUriForFile(
+            context,
+            "${BuildConfig.APPLICATION_ID}.fileprovider",
+            apkFile
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 
     LaunchedEffect(Unit) {
@@ -353,6 +400,9 @@ fun OssApp() {
                         },
                         onMarkdownClick = { entry ->
                             credentials?.let { loadMarkdown(it, selectedBucket!!, entry.key) }
+                        },
+                        onApkClick = { entry ->
+                            credentials?.let { downloadAndInstallApk(it, selectedBucket!!, entry.key) }
                         }
                     )
                 }

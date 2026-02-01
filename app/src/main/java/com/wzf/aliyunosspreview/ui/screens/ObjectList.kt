@@ -44,6 +44,7 @@ fun ObjectList(
     onDeleteSelected: () -> Unit,
     onFolderClick: (OssObjectEntry) -> Unit,
     onMarkdownClick: (OssObjectEntry) -> Unit,
+    onApkClick: (OssObjectEntry) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -93,6 +94,7 @@ fun ObjectList(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(objects, key = { it.key }) { entry ->
                 val isMarkdown = entry.key.endsWith(".md", ignoreCase = true)
+                val isApk = entry.key.endsWith(".apk", ignoreCase = true)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -101,6 +103,7 @@ fun ObjectList(
                                 selectionMode -> onToggleSelection(entry.key)
                                 entry.isDirectory -> onFolderClick(entry)
                                 isMarkdown -> onMarkdownClick(entry)
+                                isApk -> onApkClick(entry)
                             }
                         }
                         .padding(vertical = 8.dp),
@@ -128,6 +131,13 @@ fun ObjectList(
                             if (isMarkdown) {
                                 Text(
                                     text = "Markdown",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (isApk) {
+                                Text(
+                                    text = "APK (tap to install)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
