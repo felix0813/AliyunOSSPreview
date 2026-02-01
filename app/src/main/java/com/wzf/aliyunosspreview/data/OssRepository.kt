@@ -3,6 +3,7 @@ package com.wzf.aliyunosspreview.data
 import android.content.Context
 import com.alibaba.sdk.android.oss.OSSClient
 import com.alibaba.sdk.android.oss.common.auth.OSSPlainTextAKSKCredentialProvider
+import com.alibaba.sdk.android.oss.model.GetObjectRequest
 import com.alibaba.sdk.android.oss.model.ListBucketsRequest
 import com.alibaba.sdk.android.oss.model.ListObjectsRequest
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ class OssRepository(private val context: Context) {
                 lastModified = null,
             )
         }
-        val files = result.objectSummarys.orEmpty().map { summary ->
+        val files = result.objectSummaries.orEmpty().map { summary ->
             val displayName = summary.key.removePrefix(prefix)
             OssObjectEntry(
                 key = summary.key,
@@ -82,7 +83,7 @@ class OssRepository(private val context: Context) {
                 marker?.let { setMarker(it) }
             }
             val result = client.listObjects(request)
-            val objectKeys = result.objectSummarys.orEmpty()
+            val objectKeys = result.objectSummaries.orEmpty()
                 .mapNotNull { it.key }
                 .filter { it.isNotBlank() && !it.endsWith("/") }
             keys.addAll(objectKeys)
@@ -98,7 +99,7 @@ class OssRepository(private val context: Context) {
         key: String,
     ): String = withContext(Dispatchers.IO) {
         val client = buildClient(credentials)
-        val ossObject = client.getObject(bucketName, key)
+        val ossObject = client.getObject(GetObjectRequest(bucketName, key))
         ossObject.objectContent.use { input ->
             input.bufferedReader().use { reader -> reader.readText() }
         }
@@ -112,7 +113,7 @@ class OssRepository(private val context: Context) {
     ) = withContext(Dispatchers.IO) {
         val client = buildClient(credentials)
         targetFile.parentFile?.mkdirs()
-        val ossObject = client.getObject(bucketName, key)
+        val ossObject = client.getObject(GetObjectRequest(bucketName, key))
         ossObject.objectContent.use { input ->
             FileOutputStream(targetFile).use { output ->
                 input.copyTo(output)
