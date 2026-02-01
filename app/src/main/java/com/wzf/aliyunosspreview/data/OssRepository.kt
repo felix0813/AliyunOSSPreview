@@ -95,6 +95,44 @@ class OssRepository(private val context: Context) {
         keys
     }
 
+    suspend fun listAllObjectEntries(
+        credentials: OssCredentials,
+        bucketName: String,
+        prefix: String,
+    ): List<OssObjectEntry> = withContext(Dispatchers.IO) {
+        val client = buildClient(credentials)
+        val entries = mutableListOf<OssObjectEntry>()
+        var marker: String? = null
+        var truncated: Boolean
+        do {
+            val request = ListObjectsRequest(bucketName).apply {
+                setPrefix(prefix)
+                setMaxKeys(1000)
+                marker?.let { setMarker(it) }
+            }
+            val result = client.listObjects(request)
+            result.objectSummaries.orEmpty()
+                .mapNotNull { summary ->
+                    val key = summary.key
+                    if (key.isNullOrBlank() || key.endsWith("/")) {
+                        null
+                    } else {
+                        OssObjectEntry(
+                            key = key,
+                            displayName = key.substringAfterLast('/'),
+                            isDirectory = false,
+                            size = summary.size,
+                            lastModified = summary.lastModified,
+                        )
+                    }
+                }
+                .forEach { entries.add(it) }
+            marker = result.nextMarker
+            truncated = result.isTruncated
+        } while (truncated)
+        entries
+    }
+
     suspend fun fetchObjectText(
         credentials: OssCredentials,
         bucketName: String,

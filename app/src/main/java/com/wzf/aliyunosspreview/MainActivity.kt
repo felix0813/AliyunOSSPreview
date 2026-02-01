@@ -1,8 +1,11 @@
 ﻿package com.wzf.aliyunosspreview
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,8 +50,26 @@ import com.wzf.aliyunosspreview.ui.screens.MarkdownPreviewScreen
 import com.wzf.aliyunosspreview.ui.screens.ObjectList
 import com.wzf.aliyunosspreview.ui.screens.OssTopBar
 import com.wzf.aliyunosspreview.ui.theme.AliyunOSSPreviewTheme
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.core.net.toUri
+
+enum class ConflictAction {
+    OVERWRITE,
+    RENAME,
+    SKIP
+}
+
+data class DownloadConflict(
+    val entry: OssObjectEntry,
+    val targetFile: File
+)
+
+data class RenameRequest(
+    val entry: OssObjectEntry,
+    val targetFile: File
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,14 +105,98 @@ fun OssApp() {
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var showDownloadDialog by remember { mutableStateOf(false) }
     var copyToSystemDownloads by remember { mutableStateOf(false) }
+    var showApkDownloadConfirm by remember { mutableStateOf(false) }
+    var showApkInstallConfirm by remember { mutableStateOf(false) }
+    var showApkInstallPermission by remember { mutableStateOf(false) }
+    var pendingApkEntry by remember { mutableStateOf<OssObjectEntry?>(null) }
+    var pendingApkFile by remember { mutableStateOf<File?>(null) }
+    var activeConflict by remember { mutableStateOf<DownloadConflict?>(null) }
+    var conflictDeferred by remember { mutableStateOf<CompletableDeferred<ConflictAction>?>(null) }
+    var activeRename by remember { mutableStateOf<RenameRequest?>(null) }
+    var renameDeferred by remember { mutableStateOf<CompletableDeferred<File?>?>(null) }
+    var renameInput by remember { mutableStateOf("") }
 
     fun resetSelection() {
         selectionMode = false
         selectedKeys = emptySet()
     }
 
+    fun suggestRename(file: File): String {
+        val name = file.name
+        val dotIndex = name.lastIndexOf('.')
+        val base = if (dotIndex > 0) name.substring(0, dotIndex) else name
+        val ext = if (dotIndex > 0) name.substring(dotIndex) else ""
+        return "$base (1)$ext"
+    }
+
+    fun isSameFile(localFile: File, entry: OssObjectEntry): Boolean {
+        val remoteSize = entry.size
+        return remoteSize != null && localFile.length() == remoteSize
+    }
+
+    suspend fun resolveConflict(entry: OssObjectEntry, targetFile: File): ConflictAction {
+        val deferred = CompletableDeferred<ConflictAction>()
+        conflictDeferred = deferred
+        activeConflict = DownloadConflict(entry, targetFile)
+        return deferred.await()
+    }
+
+    suspend fun resolveRename(entry: OssObjectEntry, targetFile: File): File? {
+        val deferred = CompletableDeferred<File?>()
+        renameDeferred = deferred
+        activeRename = RenameRequest(entry, targetFile)
+        renameInput = suggestRename(targetFile)
+        return deferred.await()
+    }
+
+    suspend fun resolveTargetFile(
+        entry: OssObjectEntry,
+        initialFile: File,
+    ): Pair<File, Boolean>? {
+        var targetFile = initialFile
+        while (true) {
+            if (!targetFile.exists()) {
+                return targetFile to true
+            }
+            if (isSameFile(targetFile, entry)) {
+                return targetFile to false
+            }
+            when (resolveConflict(entry, targetFile)) {
+                ConflictAction.OVERWRITE -> return targetFile to true
+                ConflictAction.SKIP -> return null
+                ConflictAction.RENAME -> {
+                    val renamed = resolveRename(entry, targetFile) ?: return null
+                    targetFile = renamed
+                }
+            }
+        }
+    }
+
+    fun canInstallApk(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+    }
+
+    fun openInstallPermissionSettings() {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            "package:${context.packageName}".toUri()
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
     fun installApk(apkFile: File) {
         if (!apkFile.exists()) return
+        if (!canInstallApk()) {
+            pendingApkFile = apkFile
+            showApkInstallPermission = true
+            return
+        }
         val apkUri = FileProvider.getUriForFile(
             context,
             "${BuildConfig.APPLICATION_ID}.fileprovider",
@@ -178,36 +284,54 @@ fun OssApp() {
                 null
             }
             runCatching {
-                val keysToDownload = mutableSetOf<String>()
+                val entriesToDownload = mutableMapOf<String, OssObjectEntry>()
                 selectedKeys.forEach { key ->
                     val entry = objects.find { it.key == key }
                     if (entry?.isDirectory == true) {
-                        keysToDownload.addAll(repository.listAllObjects(targetCredentials, bucket.name, key))
+                        repository.listAllObjectEntries(targetCredentials, bucket.name, key)
+                            .forEach { child -> entriesToDownload[child.key] = child }
                     } else {
-                        keysToDownload.add(key)
+                        val resolvedEntry = entry ?: OssObjectEntry(
+                            key = key,
+                            displayName = key.substringAfterLast('/'),
+                            isDirectory = false,
+                            size = null,
+                            lastModified = null,
+                        )
+                        entriesToDownload[resolvedEntry.key] = resolvedEntry
                     }
                 }
-                val apkFiles = mutableListOf<File>()
-                keysToDownload.forEach { key ->
-                    val appTargetFile = File(appBucketDir, key)
-                    repository.downloadObject(targetCredentials, bucket.name, key, appTargetFile)
-                    if (key.endsWith(".apk", ignoreCase = true)) {
-                        apkFiles.add(appTargetFile)
+                var downloadedCount = 0
+                var reusedCount = 0
+                var skippedCount = 0
+                entriesToDownload.values.forEach { entry ->
+                    val appTargetFile = File(appBucketDir, entry.key)
+                    val resolved = resolveTargetFile(entry, appTargetFile)
+                    if (resolved == null) {
+                        skippedCount += 1
+                        return@forEach
+                    }
+                    val (targetFile, shouldDownload) = resolved
+                    if (shouldDownload) {
+                        repository.downloadObject(targetCredentials, bucket.name, entry.key, targetFile)
+                        downloadedCount += 1
+                    } else {
+                        reusedCount += 1
                     }
                     systemBucketDir?.let { systemDir ->
-                        val systemTargetFile = File(systemDir, key)
+                        val relativePath = appBucketDir.toURI().relativize(targetFile.toURI()).path
+                        val systemTargetFile = File(systemDir, relativePath)
                         systemTargetFile.parentFile?.mkdirs()
-                        appTargetFile.copyTo(systemTargetFile, overwrite = true)
+                        targetFile.copyTo(systemTargetFile, overwrite = true)
                     }
                 }
-                infoMessage = if (systemBucketDir == null) {
-                    "Downloaded ${keysToDownload.size} files to ${appBucketDir.absolutePath}"
-                } else {
-                    "Downloaded ${keysToDownload.size} files to ${appBucketDir.absolutePath} " +
-                        "and copied to ${systemBucketDir.absolutePath}"
-                }
-                apkFiles.forEach { apkFile ->
-                    installApk(apkFile)
+                infoMessage = buildString {
+                    append("Downloaded $downloadedCount files to ${appBucketDir.absolutePath}")
+                    if (reusedCount > 0) append(", reused $reusedCount existing files")
+                    if (skippedCount > 0) append(", skipped $skippedCount files")
+                    if (systemBucketDir != null) {
+                        append(" and copied to ${systemBucketDir.absolutePath}")
+                    }
                 }
                 resetSelection()
                 isLoading = false
@@ -250,18 +374,29 @@ fun OssApp() {
     fun downloadAndInstallApk(
         targetCredentials: OssCredentials,
         bucket: OssBucket,
-        key: String
+        entry: OssObjectEntry
     ) {
         coroutineScope.launch {
             isLoading = true
             errorMessage = null
             infoMessage = null
             val appDownloadRoot = context.getExternalFilesDir("downloads") ?: context.filesDir
-            val appTargetFile = File(appDownloadRoot, key)
+            val appTargetFile = File(appDownloadRoot, entry.key)
             runCatching {
-                repository.downloadObject(targetCredentials, bucket.name, key, appTargetFile)
-                infoMessage = "Downloaded APK to ${appTargetFile.absolutePath}"
-                installApk(appTargetFile)
+                val resolved = resolveTargetFile(entry, appTargetFile)
+                if (resolved == null) {
+                    isLoading = false
+                    return@runCatching
+                }
+                val (targetFile, shouldDownload) = resolved
+                if (shouldDownload) {
+                    repository.downloadObject(targetCredentials, bucket.name, entry.key, targetFile)
+                    infoMessage = "Downloaded APK to ${targetFile.absolutePath}"
+                } else {
+                    infoMessage = "APK already downloaded at ${targetFile.absolutePath}"
+                }
+                pendingApkFile = targetFile
+                showApkInstallConfirm = true
                 isLoading = false
             }.onFailure { throwable ->
                 errorMessage = throwable.message ?: "Download failed"
@@ -402,12 +537,234 @@ fun OssApp() {
                             credentials?.let { loadMarkdown(it, selectedBucket!!, entry.key) }
                         },
                         onApkClick = { entry ->
-                            credentials?.let { downloadAndInstallApk(it, selectedBucket!!, entry.key) }
+                            pendingApkEntry = entry
+                            showApkDownloadConfirm = true
                         }
                     )
                 }
             }
         }
+    }
+
+    if (showApkDownloadConfirm) {
+        AlertDialog(
+            onDismissRequest = {
+                showApkDownloadConfirm = false
+                pendingApkEntry = null
+            },
+            title = { Text(text = "Download APK") },
+            text = {
+                Text(
+                    text = "Download ${pendingApkEntry?.key?.substringAfterLast('/') ?: "this APK"}?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetCredentials = credentials
+                        val targetBucket = selectedBucket
+                        val targetEntry = pendingApkEntry
+                        if (targetCredentials != null && targetBucket != null && targetEntry != null) {
+                            downloadAndInstallApk(targetCredentials, targetBucket, targetEntry)
+                        }
+                        showApkDownloadConfirm = false
+                        pendingApkEntry = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Download")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showApkDownloadConfirm = false
+                        pendingApkEntry = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
+    }
+
+    if (showApkInstallConfirm) {
+        AlertDialog(
+            onDismissRequest = {
+                showApkInstallConfirm = false
+                pendingApkFile = null
+            },
+            title = { Text(text = "Install APK") },
+            text = {
+                Text(
+                    text = "Download complete. Install now?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingApkFile?.let { installApk(it) }
+                        showApkInstallConfirm = false
+                        pendingApkFile = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Install")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showApkInstallConfirm = false
+                        pendingApkFile = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Later")
+                }
+            }
+        )
+    }
+
+    if (showApkInstallPermission) {
+        AlertDialog(
+            onDismissRequest = {
+                showApkInstallPermission = false
+            },
+            title = { Text(text = "Allow app installs") },
+            text = {
+                Text(
+                    text = "To install this APK, allow installs from this app in system settings."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showApkInstallPermission = false
+                        openInstallPermissionSettings()
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Open settings")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showApkInstallPermission = false
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
+    }
+
+    if (activeConflict != null) {
+        val conflict = activeConflict!!
+        AlertDialog(
+            onDismissRequest = {
+                conflictDeferred?.complete(ConflictAction.SKIP)
+                conflictDeferred = null
+                activeConflict = null
+            },
+            title = { Text(text = "File already exists") },
+            text = {
+                Text(
+                    text = "A file named ${conflict.targetFile.name} already exists. What do you want to do?"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        conflictDeferred?.complete(ConflictAction.OVERWRITE)
+                        conflictDeferred = null
+                        activeConflict = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Overwrite")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            conflictDeferred?.complete(ConflictAction.RENAME)
+                            conflictDeferred = null
+                            activeConflict = null
+                        },
+                        enabled = !isLoading
+                    ) {
+                        Text(text = "Rename")
+                    }
+                    Button(
+                        onClick = {
+                            conflictDeferred?.complete(ConflictAction.SKIP)
+                            conflictDeferred = null
+                            activeConflict = null
+                        },
+                        enabled = !isLoading
+                    ) {
+                        Text(text = "Skip")
+                    }
+                }
+            }
+        )
+    }
+
+    if (activeRename != null) {
+        val renameRequest = activeRename!!
+        AlertDialog(
+            onDismissRequest = {
+                renameDeferred?.complete(null)
+                renameDeferred = null
+                activeRename = null
+            },
+            title = { Text(text = "Rename file") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "Choose a new name for ${renameRequest.targetFile.name}:")
+                    OutlinedTextField(
+                        value = renameInput,
+                        onValueChange = { renameInput = it },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = renameInput.trim()
+                        val newFile = if (trimmed.isBlank()) {
+                            null
+                        } else {
+                            File(renameRequest.targetFile.parentFile, trimmed)
+                        }
+                        renameDeferred?.complete(newFile)
+                        renameDeferred = null
+                        activeRename = null
+                    },
+                    enabled = !isLoading && renameInput.isNotBlank()
+                ) {
+                    Text(text = "Save")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        renameDeferred?.complete(null)
+                        renameDeferred = null
+                        activeRename = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
     }
 
     if (showDownloadDialog) {
