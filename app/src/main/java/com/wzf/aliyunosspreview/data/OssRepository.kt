@@ -1,9 +1,10 @@
-package com.wzf.aliyunosspreview.data
+﻿package com.wzf.aliyunosspreview.data
 
 import android.content.Context
 import com.alibaba.sdk.android.oss.OSSClient
 import com.alibaba.sdk.android.oss.common.auth.OSSPlainTextAKSKCredentialProvider
 import com.alibaba.sdk.android.oss.model.GetObjectRequest
+import com.alibaba.sdk.android.oss.model.DeleteObjectRequest
 import com.alibaba.sdk.android.oss.model.ListBucketsRequest
 import com.alibaba.sdk.android.oss.model.ListObjectsRequest
 import kotlinx.coroutines.Dispatchers
@@ -20,15 +21,16 @@ class OssRepository(private val context: Context) {
         return OSSClient(context, credentials.endpoint, provider)
     }
 
-    suspend fun listBuckets(credentials: OssCredentials): List<OssBucket> = withContext(Dispatchers.IO) {
-        val client = buildClient(credentials)
-        val request = ListBucketsRequest()
-        val result = client.listBuckets(request)
-        result.buckets
-            .map { OssBucket(name = it.name, location = it.location) }
-            .filter { it.location == null || it.location == credentials.region }
-            .sortedBy { it.name }
-    }
+    suspend fun listBuckets(credentials: OssCredentials): List<OssBucket> =
+        withContext(Dispatchers.IO) {
+            val client = buildClient(credentials)
+            val request = ListBucketsRequest()
+            val result = client.listBuckets(request)
+            result.buckets
+                .map { OssBucket(name = it.name, location = it.location) }
+                .filter { it.location == null || it.location == credentials.region }
+                .sortedBy { it.name }
+        }
 
     suspend fun listObjects(
         credentials: OssCredentials,
@@ -38,7 +40,7 @@ class OssRepository(private val context: Context) {
         val client = buildClient(credentials)
         val request = ListObjectsRequest(bucketName).apply {
             setPrefix(prefix)
-            setDelimiter("/")
+            delimiter = "/"
             setMaxKeys(1000)
         }
         val result = client.listObjects(request)
@@ -118,6 +120,18 @@ class OssRepository(private val context: Context) {
             FileOutputStream(targetFile).use { output ->
                 input.copyTo(output)
             }
+        }
+    }
+
+    suspend fun deleteObjects(
+        credentials: OssCredentials,
+        bucketName: String,
+        keys: List<String>,
+    ) = withContext(Dispatchers.IO) {
+        if (keys.isEmpty()) return@withContext
+        val client = buildClient(credentials)
+        keys.forEach { key ->
+            client.deleteObject(DeleteObjectRequest(bucketName, key))
         }
     }
 }

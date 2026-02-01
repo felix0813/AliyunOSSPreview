@@ -1,4 +1,4 @@
-package com.wzf.aliyunosspreview
+﻿package com.wzf.aliyunosspreview
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,11 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,13 +47,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.compose.ui.unit.dp
-import dev.jeziellago.compose.markdowntext.MarkdownText
 import com.wzf.aliyunosspreview.data.OssBucket
 import com.wzf.aliyunosspreview.data.OssCredentials
 import com.wzf.aliyunosspreview.data.OssObjectEntry
 import com.wzf.aliyunosspreview.data.OssPreferences
 import com.wzf.aliyunosspreview.data.OssRepository
 import com.wzf.aliyunosspreview.ui.theme.AliyunOSSPreviewTheme
+import dev.jeziellago.compose.markdowntext.MarkdownText
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -106,7 +106,7 @@ fun OssApp() {
                     isLoading = false
                 }
                 .onFailure { throwable ->
-                    errorMessage = throwable.message ?: "无法获取存储桶列表"
+                    errorMessage = throwable.message ?: "Failed to load buckets"
                     isLoading = false
                 }
         }
@@ -125,7 +125,7 @@ fun OssApp() {
                     isLoading = false
                 }
                 .onFailure { throwable ->
-                    errorMessage = throwable.message ?: "无法获取文件列表"
+                    errorMessage = throwable.message ?: "Failed to load objects"
                     isLoading = false
                 }
         }
@@ -143,7 +143,7 @@ fun OssApp() {
                     isLoading = false
                 }
                 .onFailure { throwable ->
-                    errorMessage = throwable.message ?: "无法加载 Markdown"
+                    errorMessage = throwable.message ?: "Failed to load markdown"
                     isLoading = false
                 }
         }
@@ -170,11 +170,40 @@ fun OssApp() {
                     val targetFile = File(bucketDir, key)
                     repository.downloadObject(targetCredentials, bucket.name, key, targetFile)
                 }
-                infoMessage = "已下载 ${keysToDownload.size} 个文件到 ${bucketDir.absolutePath}"
+                infoMessage = "Downloaded ${keysToDownload.size} files to ${bucketDir.absolutePath}"
                 resetSelection()
                 isLoading = false
             }.onFailure { throwable ->
-                errorMessage = throwable.message ?: "下载失败"
+                errorMessage = throwable.message ?: "Download failed"
+                isLoading = false
+            }
+        }
+    }
+
+    fun deleteSelection(targetCredentials: OssCredentials, bucket: OssBucket) {
+        coroutineScope.launch {
+            isLoading = true
+            errorMessage = null
+            infoMessage = null
+            runCatching {
+                val keysToDelete = mutableSetOf<String>()
+                selectedKeys.forEach { key ->
+                    val entry = objects.find { it.key == key }
+                    if (entry?.isDirectory == true) {
+                        keysToDelete.addAll(repository.listAllObjects(targetCredentials, bucket.name, key))
+                        if (key.endsWith("/")) {
+                            keysToDelete.add(key)
+                        }
+                    } else {
+                        keysToDelete.add(key)
+                    }
+                }
+                repository.deleteObjects(targetCredentials, bucket.name, keysToDelete.toList())
+                infoMessage = "Deleted ${keysToDelete.size} files"
+                resetSelection()
+                loadObjects(targetCredentials, bucket, prefix)
+            }.onFailure { throwable ->
+                errorMessage = throwable.message ?: "Delete failed"
                 isLoading = false
             }
         }
@@ -206,8 +235,8 @@ fun OssApp() {
         topBar = {
             OssTopBar(
                 title = when {
-                    credentials == null -> "OSS 登录"
-                    selectedBucket == null -> "存储桶"
+                    credentials == null -> "OSS Login"
+                    selectedBucket == null -> "Buckets"
                     else -> selectedBucket?.name.orEmpty()
                 },
                 showBack = selectedBucket != null,
@@ -288,6 +317,9 @@ fun OssApp() {
                         onDownloadSelected = {
                             credentials?.let { downloadSelection(it, selectedBucket!!) }
                         },
+                        onDeleteSelected = {
+                            credentials?.let { deleteSelection(it, selectedBucket!!) }
+                        },
                         onFolderClick = { entry ->
                             credentials?.let { loadObjects(it, selectedBucket!!, entry.key) }
                         },
@@ -313,7 +345,7 @@ fun OssTopBar(
         navigationIcon = if (showBack) {
             {
                 Icon(
-                    imageVector = Icons.Default.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
                     modifier = Modifier
                         .padding(horizontal = 12.dp)
@@ -346,7 +378,7 @@ fun LoginScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(text = "使用 AccessKey 登录 OSS", style = MaterialTheme.typography.titleMedium)
+        Text(text = "Login with AccessKey", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = accessKeyId,
             onValueChange = { accessKeyId = it },
@@ -386,7 +418,7 @@ fun LoginScreen(
             enabled = !isLoading,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(text = if (isLoading) "登录中..." else "登录")
+            Text(text = if (isLoading) "Logging in..." else "Login")
         }
         errorMessage?.let {
             Text(text = it, color = MaterialTheme.colorScheme.error)
@@ -410,7 +442,7 @@ fun BucketList(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Button(onClick = onRefresh, enabled = !isLoading, modifier = Modifier.fillMaxWidth()) {
-            Text(text = if (isLoading) "加载中..." else "刷新存储桶")
+            Text(text = if (isLoading) "Loading..." else "Refresh buckets")
         }
         if (isLoading) {
             Row(
@@ -432,7 +464,7 @@ fun BucketList(
                 ) {
                     Text(text = bucket.name, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = "区域: ${bucket.location ?: "未知"}",
+                        text = "Region: ${bucket.location ?: "unknown"}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -454,6 +486,7 @@ fun ObjectList(
     onSelectionModeChange: (Boolean) -> Unit,
     onToggleSelection: (String) -> Unit,
     onDownloadSelected: () -> Unit,
+    onDeleteSelected: () -> Unit,
     onFolderClick: (OssObjectEntry) -> Unit,
     onMarkdownClick: (OssObjectEntry) -> Unit,
 ) {
@@ -464,7 +497,7 @@ fun ObjectList(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = if (prefix.isBlank()) "当前路径: /" else "当前路径: /$prefix",
+            text = if (prefix.isBlank()) "Path: /" else "Path: /$prefix",
             style = MaterialTheme.typography.bodyMedium
         )
         Row(
@@ -475,14 +508,20 @@ fun ObjectList(
                 onClick = { onSelectionModeChange(!selectionMode) },
                 enabled = !isLoading
             ) {
-                Text(text = if (selectionMode) "完成选择" else "选择下载")
+                Text(text = if (selectionMode) "Done" else "Select")
             }
             if (selectionMode) {
                 Button(
                     onClick = onDownloadSelected,
                     enabled = selectedKeys.isNotEmpty() && !isLoading
                 ) {
-                    Text(text = "下载选中(${selectedKeys.size})")
+                    Text(text = "Download (${selectedKeys.size})")
+                }
+                Button(
+                    onClick = onDeleteSelected,
+                    enabled = selectedKeys.isNotEmpty() && !isLoading
+                ) {
+                    Text(text = "Delete (${selectedKeys.size})")
                 }
             }
         }
@@ -520,7 +559,7 @@ fun ObjectList(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Icon(
-                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
                         contentDescription = null
                     )
                     Spacer(modifier = Modifier.width(12.dp))
@@ -528,7 +567,7 @@ fun ObjectList(
                         Text(text = entry.displayName, style = MaterialTheme.typography.bodyLarge)
                         if (!entry.isDirectory) {
                             Text(
-                                text = "大小: ${entry.size ?: 0} bytes",
+                                text = "Size: ${entry.size ?: 0} bytes",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             if (isMarkdown) {
@@ -545,7 +584,7 @@ fun ObjectList(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "桶: ${bucket.name}",
+            text = "Bucket: ${bucket.name}",
             style = MaterialTheme.typography.bodySmall
         )
     }
@@ -564,7 +603,7 @@ fun MarkdownPreviewScreen(
                 title = { Text(text = title) },
                 navigationIcon = {
                     Icon(
-                        imageVector = Icons.Default.ArrowBack,
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         modifier = Modifier
                             .padding(horizontal = 12.dp)
