@@ -1,6 +1,7 @@
 ﻿package com.wzf.aliyunosspreview
 
 import android.os.Bundle
+import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -26,6 +27,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -89,6 +91,8 @@ fun OssApp() {
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
+    var showDownloadDialog by remember { mutableStateOf(false) }
+    var copyToSystemDownloads by remember { mutableStateOf(false) }
 
     fun resetSelection() {
         selectionMode = false
@@ -149,13 +153,25 @@ fun OssApp() {
         }
     }
 
-    fun downloadSelection(targetCredentials: OssCredentials, bucket: OssBucket) {
+    fun downloadSelection(
+        targetCredentials: OssCredentials,
+        bucket: OssBucket,
+        copyToSystemDownloads: Boolean,
+    ) {
         coroutineScope.launch {
             isLoading = true
             errorMessage = null
             infoMessage = null
-            val downloadRoot = context.getExternalFilesDir("downloads") ?: context.filesDir
-            val bucketDir = File(downloadRoot, bucket.name)
+            val appDownloadRoot = context.getExternalFilesDir("downloads") ?: context.filesDir
+            val appBucketDir = File(appDownloadRoot, bucket.name)
+            val systemBucketDir = if (copyToSystemDownloads) {
+                File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    bucket.name
+                )
+            } else {
+                null
+            }
             runCatching {
                 val keysToDownload = mutableSetOf<String>()
                 selectedKeys.forEach { key ->
@@ -167,10 +183,20 @@ fun OssApp() {
                     }
                 }
                 keysToDownload.forEach { key ->
-                    val targetFile = File(bucketDir, key)
-                    repository.downloadObject(targetCredentials, bucket.name, key, targetFile)
+                    val appTargetFile = File(appBucketDir, key)
+                    repository.downloadObject(targetCredentials, bucket.name, key, appTargetFile)
+                    systemBucketDir?.let { systemDir ->
+                        val systemTargetFile = File(systemDir, key)
+                        systemTargetFile.parentFile?.mkdirs()
+                        appTargetFile.copyTo(systemTargetFile, overwrite = true)
+                    }
                 }
-                infoMessage = "Downloaded ${keysToDownload.size} files to ${bucketDir.absolutePath}"
+                infoMessage = if (systemBucketDir == null) {
+                    "Downloaded ${keysToDownload.size} files to ${appBucketDir.absolutePath}"
+                } else {
+                    "Downloaded ${keysToDownload.size} files to ${appBucketDir.absolutePath} " +
+                        "and copied to ${systemBucketDir.absolutePath}"
+                }
                 resetSelection()
                 isLoading = false
             }.onFailure { throwable ->
@@ -315,7 +341,7 @@ fun OssApp() {
                             }
                         },
                         onDownloadSelected = {
-                            credentials?.let { downloadSelection(it, selectedBucket!!) }
+                            showDownloadDialog = true
                         },
                         onDeleteSelected = {
                             credentials?.let { deleteSelection(it, selectedBucket!!) }
@@ -330,6 +356,55 @@ fun OssApp() {
                 }
             }
         }
+    }
+
+    if (showDownloadDialog) {
+        AlertDialog(
+            onDismissRequest = { showDownloadDialog = false },
+            title = { Text(text = "Download files") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "Save files to the app folder. Do you want to copy them to the system Downloads folder too?")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { copyToSystemDownloads = !copyToSystemDownloads }
+                    ) {
+                        Checkbox(
+                            checked = copyToSystemDownloads,
+                            onCheckedChange = { copyToSystemDownloads = it }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Also copy to system Downloads")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetCredentials = credentials
+                        val targetBucket = selectedBucket
+                        if (targetCredentials != null && targetBucket != null) {
+                            downloadSelection(
+                                targetCredentials,
+                                targetBucket,
+                                copyToSystemDownloads,
+                            )
+                        }
+                        showDownloadDialog = false
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Download")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showDownloadDialog = false }, enabled = !isLoading) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
     }
 }
 
