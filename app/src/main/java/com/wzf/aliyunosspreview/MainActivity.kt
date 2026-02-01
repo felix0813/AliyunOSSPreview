@@ -89,6 +89,21 @@ fun OssApp() {
         selectedKeys = emptySet()
     }
 
+    fun installApk(apkFile: File) {
+        if (!apkFile.exists()) return
+        val apkUri = FileProvider.getUriForFile(
+            context,
+            "${BuildConfig.APPLICATION_ID}.fileprovider",
+            apkFile
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }
+
     fun loadBuckets(targetCredentials: OssCredentials) {
         coroutineScope.launch {
             isLoading = true
@@ -253,21 +268,6 @@ fun OssApp() {
                 isLoading = false
             }
         }
-    }
-
-    fun installApk(apkFile: File) {
-        if (!apkFile.exists()) return
-        val apkUri = FileProvider.getUriForFile(
-            context,
-            "${BuildConfig.APPLICATION_ID}.fileprovider",
-            apkFile
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(apkUri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
     }
 
     LaunchedEffect(Unit) {
