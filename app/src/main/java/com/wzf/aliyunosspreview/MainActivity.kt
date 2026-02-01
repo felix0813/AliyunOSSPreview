@@ -6,47 +6,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.compose.ui.unit.dp
@@ -55,8 +27,12 @@ import com.wzf.aliyunosspreview.data.OssCredentials
 import com.wzf.aliyunosspreview.data.OssObjectEntry
 import com.wzf.aliyunosspreview.data.OssPreferences
 import com.wzf.aliyunosspreview.data.OssRepository
+import com.wzf.aliyunosspreview.ui.screens.BucketList
+import com.wzf.aliyunosspreview.ui.screens.LoginScreen
+import com.wzf.aliyunosspreview.ui.screens.MarkdownPreviewScreen
+import com.wzf.aliyunosspreview.ui.screens.ObjectList
+import com.wzf.aliyunosspreview.ui.screens.OssTopBar
 import com.wzf.aliyunosspreview.ui.theme.AliyunOSSPreviewTheme
-import dev.jeziellago.compose.markdowntext.MarkdownText
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -420,302 +396,6 @@ fun OssApp() {
                 }
             }
         )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun OssTopBar(
-    title: String,
-    showBack: Boolean,
-    onBack: () -> Unit,
-) {
-    TopAppBar(
-        title = { Text(text = title) },
-        navigationIcon = if (showBack) {
-            {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .clickable { onBack() }
-                )
-            }
-        } else {
-            {}
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
-    )
-}
-
-@Composable
-fun LoginScreen(
-    isLoading: Boolean,
-    errorMessage: String?,
-    onLogin: (OssCredentials) -> Unit,
-) {
-    var accessKeyId by rememberSaveable { mutableStateOf("") }
-    var accessKeySecret by rememberSaveable { mutableStateOf("") }
-    var endpoint by rememberSaveable { mutableStateOf("https://oss-cn-hangzhou.aliyuncs.com") }
-    var region by rememberSaveable { mutableStateOf("oss-cn-hangzhou") }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(text = "Login with AccessKey", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = accessKeyId,
-            onValueChange = { accessKeyId = it },
-            label = { Text("AccessKey ID") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = accessKeySecret,
-            onValueChange = { accessKeySecret = it },
-            label = { Text("AccessKey Secret") },
-            modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-        )
-        OutlinedTextField(
-            value = endpoint,
-            onValueChange = { endpoint = it },
-            label = { Text("Endpoint") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = region,
-            onValueChange = { region = it },
-            label = { Text("Region") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = {
-                onLogin(
-                    OssCredentials(
-                        accessKeyId = accessKeyId.trim(),
-                        accessKeySecret = accessKeySecret.trim(),
-                        endpoint = endpoint.trim(),
-                        region = region.trim(),
-                    )
-                )
-            },
-            enabled = !isLoading,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(text = if (isLoading) "Logging in..." else "Login")
-        }
-        errorMessage?.let {
-            Text(text = it, color = MaterialTheme.colorScheme.error)
-        }
-    }
-}
-
-@Composable
-fun BucketList(
-    buckets: List<OssBucket>,
-    isLoading: Boolean,
-    errorMessage: String?,
-    infoMessage: String?,
-    onRefresh: () -> Unit,
-    onBucketSelected: (OssBucket) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Button(onClick = onRefresh, enabled = !isLoading, modifier = Modifier.fillMaxWidth()) {
-            Text(text = if (isLoading) "Loading..." else "Refresh buckets")
-        }
-        if (isLoading) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        }
-        infoMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.primary) }
-        errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error) }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(buckets, key = { it.name }) { bucket ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onBucketSelected(bucket) }
-                        .padding(vertical = 8.dp),
-                ) {
-                    Text(text = bucket.name, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = "Region: ${bucket.location ?: "unknown"}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ObjectList(
-    bucket: OssBucket,
-    prefix: String,
-    objects: List<OssObjectEntry>,
-    isLoading: Boolean,
-    errorMessage: String?,
-    infoMessage: String?,
-    selectionMode: Boolean,
-    selectedKeys: Set<String>,
-    onSelectionModeChange: (Boolean) -> Unit,
-    onToggleSelection: (String) -> Unit,
-    onDownloadSelected: () -> Unit,
-    onDeleteSelected: () -> Unit,
-    onFolderClick: (OssObjectEntry) -> Unit,
-    onMarkdownClick: (OssObjectEntry) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = if (prefix.isBlank()) "Path: /" else "Path: /$prefix",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Button(
-                onClick = { onSelectionModeChange(!selectionMode) },
-                enabled = !isLoading
-            ) {
-                Text(text = if (selectionMode) "Done" else "Select")
-            }
-            if (selectionMode) {
-                Button(
-                    onClick = onDownloadSelected,
-                    enabled = selectedKeys.isNotEmpty() && !isLoading
-                ) {
-                    Text(text = "Download (${selectedKeys.size})")
-                }
-                Button(
-                    onClick = onDeleteSelected,
-                    enabled = selectedKeys.isNotEmpty() && !isLoading
-                ) {
-                    Text(text = "Delete (${selectedKeys.size})")
-                }
-            }
-        }
-        if (isLoading) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        }
-        infoMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.primary) }
-        errorMessage?.let { Text(text = it, color = MaterialTheme.colorScheme.error) }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(objects, key = { it.key }) { entry ->
-                val isMarkdown = entry.key.endsWith(".md", ignoreCase = true)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            when {
-                                selectionMode -> onToggleSelection(entry.key)
-                                entry.isDirectory -> onFolderClick(entry)
-                                isMarkdown -> onMarkdownClick(entry)
-                            }
-                        }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (selectionMode) {
-                        Checkbox(
-                            checked = selectedKeys.contains(entry.key),
-                            onCheckedChange = { onToggleSelection(entry.key) }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Icon(
-                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(text = entry.displayName, style = MaterialTheme.typography.bodyLarge)
-                        if (!entry.isDirectory) {
-                            Text(
-                                text = "Size: ${entry.size ?: 0} bytes",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            if (isMarkdown) {
-                                Text(
-                                    text = "Markdown",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Bucket: ${bucket.name}",
-            style = MaterialTheme.typography.bodySmall
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MarkdownPreviewScreen(
-    title: String,
-    content: String,
-    onBack: () -> Unit,
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(text = title) },
-                navigationIcon = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp)
-                            .clickable { onBack() }
-                    )
-                }
-            )
-        }
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp)
-        ) {
-            item {
-                MarkdownText(
-                    modifier = Modifier.fillMaxWidth(),
-                    markdown = content
-                )
-            }
-        }
     }
 }
 
