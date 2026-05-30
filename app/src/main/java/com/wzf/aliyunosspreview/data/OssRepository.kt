@@ -1,18 +1,24 @@
-﻿package com.wzf.aliyunosspreview.data
+package com.wzf.aliyunosspreview.data
 
 import android.content.Context
+import android.util.Log
 import com.alibaba.sdk.android.oss.OSSClient
 import com.alibaba.sdk.android.oss.common.auth.OSSPlainTextAKSKCredentialProvider
 import com.alibaba.sdk.android.oss.model.GetObjectRequest
 import com.alibaba.sdk.android.oss.model.DeleteObjectRequest
 import com.alibaba.sdk.android.oss.model.ListBucketsRequest
 import com.alibaba.sdk.android.oss.model.ListObjectsRequest
+import com.alibaba.sdk.android.oss.model.PutObjectRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
 class OssRepository(private val context: Context) {
+    private companion object {
+        const val TAG = "OssRepository"
+    }
+
     private fun buildClient(credentials: OssCredentials): OSSClient {
         val provider = OSSPlainTextAKSKCredentialProvider(
             credentials.accessKeyId,
@@ -159,6 +165,24 @@ class OssRepository(private val context: Context) {
                 input.copyTo(output)
             }
         }
+    }
+
+    suspend fun uploadObject(
+        credentials: OssCredentials,
+        bucketName: String,
+        key: String,
+        sourceFile: File,
+    ) = withContext(Dispatchers.IO) {
+        Log.i(TAG, "Uploading object: bucket=$bucketName, key=$key, bytes=${sourceFile.length()}")
+        runCatching {
+            val client = buildClient(credentials)
+            val request = PutObjectRequest(bucketName, key, sourceFile.absolutePath)
+            client.putObject(request)
+        }.onSuccess {
+            Log.i(TAG, "Uploaded object successfully: bucket=$bucketName, key=$key")
+        }.onFailure { throwable ->
+            Log.e(TAG, "Failed to upload object: bucket=$bucketName, key=$key", throwable)
+        }.getOrThrow()
     }
 
     suspend fun deleteObjects(
