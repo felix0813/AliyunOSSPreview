@@ -1,6 +1,8 @@
 package com.wzf.aliyunosspreview.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +44,7 @@ fun ObjectList(
     onToggleSelection: (String) -> Unit,
     onDownloadSelected: () -> Unit,
     onDeleteSelected: () -> Unit,
+    onUploadClick: () -> Unit,
     onFolderClick: (OssObjectEntry) -> Unit,
     onMarkdownClick: (OssObjectEntry) -> Unit,
     onApkClick: (OssObjectEntry) -> Unit,
@@ -57,7 +60,9 @@ fun ObjectList(
             style = MaterialTheme.typography.bodyMedium
         )
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
@@ -65,6 +70,12 @@ fun ObjectList(
                 enabled = !isLoading
             ) {
                 Text(text = if (selectionMode) "Done" else "Select")
+            }
+            Button(
+                onClick = onUploadClick,
+                enabled = !isLoading
+            ) {
+                Text(text = "Upload")
             }
             if (selectionMode) {
                 Button(

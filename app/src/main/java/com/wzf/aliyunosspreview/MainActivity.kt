@@ -1,12 +1,16 @@
-﻿package com.wzf.aliyunosspreview
+package com.wzf.aliyunosspreview
 
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,8 +55,11 @@ import com.wzf.aliyunosspreview.ui.screens.ObjectList
 import com.wzf.aliyunosspreview.ui.screens.OssTopBar
 import com.wzf.aliyunosspreview.ui.theme.AliyunOSSPreviewTheme
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import androidx.core.net.toUri
 
 enum class ConflictAction {
@@ -70,6 +77,8 @@ data class RenameRequest(
     val entry: OssObjectEntry,
     val targetFile: File
 )
+
+private const val TAG = "OssApp"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -115,6 +124,10 @@ fun OssApp() {
     var activeRename by remember { mutableStateOf<RenameRequest?>(null) }
     var renameDeferred by remember { mutableStateOf<CompletableDeferred<File?>?>(null) }
     var renameInput by remember { mutableStateOf("") }
+    var pendingUploadUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingUploadFileName by remember { mutableStateOf("") }
+    var uploadObjectKey by remember { mutableStateOf("") }
+    var showUploadDialog by remember { mutableStateOf(false) }
 
     fun resetSelection() {
         selectionMode = false
@@ -208,6 +221,109 @@ fun OssApp() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
+    }
+
+
+    fun queryDisplayName(uri: Uri): String {
+        val displayName = context.contentResolver.query(uri, null, null, null, null).use { cursor ->
+            if (cursor != null && cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) cursor.getString(nameIndex) else null
+            } else {
+                null
+            }
+        }
+        return displayName?.ifBlank { null }
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null }
+            ?: "upload-file"
+    }
+
+    fun rememberUploadPermission(uri: Uri) {
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }.onFailure { throwable ->
+            Log.w(TAG, "Unable to persist upload file read permission for uri=$uri", throwable)
+        }
+    }
+
+    fun safeCacheName(fileName: String): String {
+        val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .ifBlank { "upload-file" }
+        return "${System.currentTimeMillis()}-$safeName"
+    }
+
+    suspend fun copyUploadToCache(uri: Uri, fileName: String): File = withContext(Dispatchers.IO) {
+        val uploadCacheDir = File(context.cacheDir, "uploads")
+        uploadCacheDir.mkdirs()
+        val targetFile = File(uploadCacheDir, safeCacheName(fileName))
+        Log.i(TAG, "Copying selected upload file into app cache: uri=$uri, target=${targetFile.absolutePath}")
+        val input = context.contentResolver.openInputStream(uri)
+            ?: error("Cannot open selected file. Please choose a readable file.")
+        input.use { source ->
+            FileOutputStream(targetFile).use { target ->
+                source.copyTo(target)
+            }
+        }
+        targetFile
+    }
+
+    fun prepareUpload(uri: Uri) {
+        rememberUploadPermission(uri)
+        val fileName = queryDisplayName(uri)
+        pendingUploadUri = uri
+        pendingUploadFileName = fileName
+        uploadObjectKey = "$prefix$fileName"
+        errorMessage = null
+        infoMessage = null
+        showUploadDialog = true
+    }
+
+    val uploadFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            prepareUpload(uri)
+        }
+    }
+
+    fun uploadSelectedFile(
+        targetCredentials: OssCredentials,
+        bucket: OssBucket,
+        sourceUri: Uri,
+        fileName: String,
+        rawKey: String,
+    ) {
+        val targetKey = rawKey.trim().trimStart('/')
+        if (targetKey.isBlank() || targetKey.endsWith("/")) {
+            errorMessage = "Upload target object key cannot be empty or end with /."
+            return
+        }
+        coroutineScope.launch {
+            isLoading = true
+            errorMessage = null
+            infoMessage = null
+            var cachedFile: File? = null
+            runCatching {
+                cachedFile = copyUploadToCache(sourceUri, fileName)
+                repository.uploadObject(targetCredentials, bucket.name, targetKey, cachedFile!!)
+                objects = repository.listObjects(targetCredentials, bucket.name, prefix)
+                infoMessage = "Uploaded $fileName to oss://${bucket.name}/$targetKey"
+                resetSelection()
+                isLoading = false
+            }.onFailure { throwable ->
+                Log.e(TAG, "Upload failed: bucket=${bucket.name}, key=$targetKey, uri=$sourceUri", throwable)
+                errorMessage = throwable.message ?: "Upload failed. Please check OSS write permissions."
+                isLoading = false
+            }
+            cachedFile?.let { file ->
+                if (!file.delete()) {
+                    Log.w(TAG, "Failed to delete cached upload file: ${file.absolutePath}")
+                }
+            }
+        }
     }
 
     fun loadBuckets(targetCredentials: OssCredentials) {
@@ -530,6 +646,9 @@ fun OssApp() {
                         onDeleteSelected = {
                             credentials?.let { deleteSelection(it, selectedBucket!!) }
                         },
+                        onUploadClick = {
+                            uploadFileLauncher.launch(arrayOf("*/*"))
+                        },
                         onFolderClick = { entry ->
                             credentials?.let { loadObjects(it, selectedBucket!!, entry.key) }
                         },
@@ -758,6 +877,69 @@ fun OssApp() {
                         renameDeferred?.complete(null)
                         renameDeferred = null
                         activeRename = null
+                    },
+                    enabled = !isLoading
+                ) {
+                    Text(text = "Cancel")
+                }
+            }
+        )
+    }
+
+
+    if (showUploadDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showUploadDialog = false
+                pendingUploadUri = null
+            },
+            title = { Text(text = "Upload file") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Upload $pendingUploadFileName to the current OSS path. " +
+                            "The selected file is read through Android's file picker, " +
+                            "so no broad storage permission is requested."
+                    )
+                    Text(
+                        text = "Your OSS access key must have PutObject permission for this bucket."
+                    )
+                    OutlinedTextField(
+                        value = uploadObjectKey,
+                        onValueChange = { uploadObjectKey = it },
+                        label = { Text(text = "OSS object key") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetCredentials = credentials
+                        val targetBucket = selectedBucket
+                        val sourceUri = pendingUploadUri
+                        if (targetCredentials != null && targetBucket != null && sourceUri != null) {
+                            uploadSelectedFile(
+                                targetCredentials,
+                                targetBucket,
+                                sourceUri,
+                                pendingUploadFileName,
+                                uploadObjectKey,
+                            )
+                        }
+                        showUploadDialog = false
+                        pendingUploadUri = null
+                    },
+                    enabled = !isLoading && uploadObjectKey.isNotBlank()
+                ) {
+                    Text(text = "Upload")
+                }
+            },
+            dismissButton = {
+                Button(
+                    onClick = {
+                        showUploadDialog = false
+                        pendingUploadUri = null
                     },
                     enabled = !isLoading
                 ) {
